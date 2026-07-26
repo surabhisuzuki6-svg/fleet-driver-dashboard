@@ -194,6 +194,7 @@
       </button>
       <div id="driverPickWrap" class="hidden">
         <select class="driver-pick" id="driverPick"></select>
+        <input type="password" inputmode="numeric" maxlength="4" placeholder="Enter your 4-digit PIN" id="driverPinInput" style="margin-top:10px;width:100%;padding:11px;border-radius:10px;border:1.5px solid var(--border);font-size:14px;box-sizing:border-box;">
         <button class="go-btn" onclick="enterDriver()">Continue as Driver</button>
       </div>
       <div id="gateSbStatus" style="margin-top:14px;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 12px;border-radius:10px;background:#F6F7FA;border:1px solid var(--border);">
@@ -231,6 +232,10 @@
         <div class="stat-card"><div class="stat-ic" style="background:#EAFAF0;color:var(--green);">⛽</div><div><div class="num" id="statExpense">₹0</div><div class="lbl">Expense (this month)</div></div></div>
         <div class="stat-card"><div class="stat-ic" id="statServiceIc" style="background:#FFF6E5;color:var(--amber);">🔧</div><div><div class="num" id="statService">0</div><div class="lbl">Vehicles Due for Service</div></div></div>
       </div>
+      <div class="card" id="liveTripsCard" style="margin-bottom:18px;display:none;">
+        <h3>🚛 Live Trips Now</h3>
+        <table><thead><tr><th>Driver</th><th>Vehicle</th><th>Started</th><th>Elapsed</th><th></th></tr></thead><tbody id="liveTripsBody"></tbody></table>
+      </div>
       <div class="grid-2">
         <div class="card">
           <h3>Live Fleet Map</h3>
@@ -255,7 +260,7 @@
       </div>
       <div class="card">
         <table>
-          <thead><tr><th></th><th>Name</th><th>Phone</th><th>License No.</th><th>Gross Salary</th><th>Status</th><th></th></tr></thead>
+          <thead><tr><th></th><th>Name</th><th>Phone</th><th>License No.</th><th>PIN</th><th>Gross Salary</th><th>Status</th><th></th></tr></thead>
           <tbody id="driversBody"></tbody>
         </table>
       </div>
@@ -345,11 +350,12 @@
           <div class="status" id="tripStatusLabel">No active trip</div>
           <div class="big" id="tripVehicleLabel">Select a vehicle to begin</div>
           <select id="vehicleSelect" style="width:100%;padding:11px;border-radius:10px;border:none;font-size:14px;margin-top:6px;"></select>
+          <div id="locPermRow" style="margin-top:10px;font-size:12px;color:#9aa5bb;display:flex;align-items:center;justify-content:space-between;gap:8px;"></div>
           <div class="trip-grid">
             <div class="trip-stat"><div class="l">Elapsed</div><div class="v" id="tripElapsed">--</div></div>
             <div class="trip-stat"><div class="l">Current Speed</div><div class="v" id="tripSpeed">--</div></div>
           </div>
-          <button class="full-btn start" id="startBtn" onclick="startTrip()">▶ Start Trip</button>
+          <button class="full-btn start" id="startBtn" onclick="openStartTripModal()">▶ Start Trip</button>
           <button class="full-btn stop hidden" id="stopBtn" onclick="stopTrip()">■ Stop Trip</button>
         </div>
 
@@ -390,6 +396,19 @@
 <div class="toast" id="toast"></div>
 
 <!-- ============ MODALS ============ -->
+<div class="overlay" id="startTripModalOverlay">
+  <div class="modal">
+    <h3>Start Trip</h3>
+    <div class="field"><label>Vehicle</label><div id="stm_vehicleName" style="font-weight:700;font-size:14.5px;padding:8px 0;"></div></div>
+    <div class="field"><label>Starting Odometer (KM)</label><input type="number" id="stm_km" placeholder="e.g. 12450"></div>
+    <div class="field"><label>Odometer Photo</label><input type="file" id="stm_photo" accept="image/*" capture="environment"></div>
+    <div class="modal-actions">
+      <button class="btn btn-outline" onclick="closeModal('startTripModalOverlay')">Cancel</button>
+      <button class="btn btn-orange" onclick="confirmStartTrip()">▶ Start Trip</button>
+    </div>
+  </div>
+</div>
+
 <div class="overlay" id="driverModalOverlay">
   <div class="modal">
     <h3 id="driverModalTitle">Add Driver</h3>
@@ -399,6 +418,12 @@
     <div class="field"><label>License No.</label><input type="text" id="dm_license"></div>
     <div class="field"><label>Gross Salary (₹)</label><input type="number" id="dm_salary"></div>
     <div class="field"><label>Photo</label><input type="file" id="dm_photo" accept="image/*"></div>
+    <div class="field"><label>Login PIN (4 digits) — tell this to the driver, it's their password</label>
+      <div style="display:flex;gap:8px;">
+        <input type="text" id="dm_pin" maxlength="4" placeholder="e.g. 4821" style="flex:1;">
+        <button type="button" class="btn btn-outline btn-sm" onclick="document.getElementById('dm_pin').value = String(Math.floor(1000+Math.random()*9000))">🎲 Generate</button>
+      </div>
+    </div>
     <div class="field"><label>Status</label>
       <select id="dm_status"><option value="active">Active</option><option value="inactive">Inactive</option></select>
     </div>
@@ -670,8 +695,18 @@ function subscribeRealtime(){
   sb.channel('fleet-trips')
     .on('postgres_changes', {event:'*', schema:'public', table:'fleet_trips'}, payload=>{
       const idx = state.trips.findIndex(t=>t.id===payload.new?.id);
+      const isNewTrip = payload.eventType==='INSERT' && idx===-1;
       if(payload.new){ if(idx>-1) state.trips[idx]=payload.new; else state.trips.unshift(payload.new); }
-      if(state.role==='admin'){ renderOverview(); }
+      if(state.role==='admin'){
+        if(isNewTrip && payload.new?.status==='ongoing'){
+          const d = state.drivers.find(x=>x.id===payload.new.driver_id);
+          const v = state.vehicles.find(x=>x.id===payload.new.vehicle_id);
+          toast(`🚛 ${d?d.name:'A driver'} started a trip${v?' on '+v.name:''}`);
+          // driver's phone needs a few seconds to send its first GPS fix
+          setTimeout(()=> locateDriver(payload.new.driver_id), 4000);
+        }
+        renderOverview();
+      }
     }).subscribe();
 }
 
@@ -684,7 +719,14 @@ function populateDriverPickList(){
 function toggleDriverPick(){
   document.getElementById('driverPickWrap').classList.toggle('hidden');
 }
+/* Admin PIN — change this to your own 4+ digit code, then redeploy the file.
+   This keeps random people who get the link from opening the full admin dashboard. */
+const ADMIN_PIN = '1234';
+
 function enterAdmin(){
+  const entered = prompt('Enter Admin PIN:');
+  if(entered===null) return;
+  if(entered.trim() !== ADMIN_PIN){ toast('Incorrect Admin PIN'); return; }
   state.role = 'admin';
   document.getElementById('gate').style.display='none';
   document.getElementById('app').classList.add('show');
@@ -694,6 +736,12 @@ function enterAdmin(){
 function enterDriver(){
   const id = document.getElementById('driverPick').value;
   if(!id){ toast('No driver selected'); return; }
+  const d = state.drivers.find(x=>x.id===id);
+  if(!d){ toast('Driver not found'); return; }
+  const pinEntered = document.getElementById('driverPinInput').value.trim();
+  if(!d.pin){ toast('No PIN set for you yet — ask admin to set one'); return; }
+  if(!pinEntered){ toast('Enter your PIN'); return; }
+  if(pinEntered !== d.pin){ toast('Incorrect PIN'); return; }
   state.role = 'driver';
   state.driverId = id;
   localStorage.setItem('fleet_last_driver', id);
@@ -849,8 +897,36 @@ function renderOverview(){
     `<tr><td>${new Date(e.time).toLocaleString('en-IN',{day:'2-digit',month:'short',hour:'2-digit',minute:'2-digit'})}</td><td>${e.text}</td></tr>`
   ).join('') || `<tr><td class="empty">No activity yet</td></tr>`;
 
+  renderLiveTrips();
   initAdminMap();
   refreshMapMarkers();
+}
+function renderLiveTrips(){
+  const card = document.getElementById('liveTripsCard');
+  const body = document.getElementById('liveTripsBody');
+  if(!card || !body) return;
+  const ongoing = state.trips.filter(t=>t.status==='ongoing');
+  if(ongoing.length===0){ card.style.display='none'; return; }
+  card.style.display='block';
+  body.innerHTML = ongoing.map(t=>{
+    const d = state.drivers.find(x=>x.id===t.driver_id);
+    const v = state.vehicles.find(x=>x.id===t.vehicle_id);
+    const ms = Date.now() - new Date(t.start_time).getTime();
+    const h = Math.floor(ms/3600000), m = Math.floor((ms%3600000)/60000);
+    return `<tr>
+      <td>${d?d.name:'—'}</td>
+      <td>${v?v.name:'—'}</td>
+      <td>${new Date(t.start_time).toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'})}</td>
+      <td>${h}h ${m}m</td>
+      <td><button class="btn btn-outline btn-sm" onclick="locateDriver('${t.driver_id}')">📍 Locate</button></td>
+    </tr>`;
+  }).join('');
+}
+function locateDriver(driverId){
+  const loc = state.locations[driverId];
+  if(!loc || !loc.lat){ toast('No location received from this driver yet'); return; }
+  if(state.adminMap){ state.adminMap.setView([loc.lat, loc.lng], 15); }
+  if(state.markers[driverId]) state.markers[driverId].openPopup();
 }
 
 /* ================= MAPS ================= */
@@ -894,6 +970,7 @@ function renderDrivers(){
       <td>${d.name||''}</td>
       <td>${d.phone||''}</td>
       <td>${d.license_no||''}</td>
+      <td style="font-weight:700;letter-spacing:.05em;">${d.pin||'—'}</td>
       <td>${fmtMoney(d.gross_salary)}</td>
       <td><span class="badge ${d.status==='inactive'?'active-alert':'completed'}">${d.status||'active'}</span></td>
       <td class="row-actions">
@@ -901,7 +978,7 @@ function renderDrivers(){
         <button class="btn btn-danger btn-sm" onclick="deleteDriver('${d.id}')">Delete</button>
       </td>
     </tr>
-  `).join('') || `<tr><td colspan="7" class="empty">No drivers yet. Click "Add Driver" to get started.</td></tr>`;
+  `).join('') || `<tr><td colspan="8" class="empty">No drivers yet. Click "Add Driver" to get started.</td></tr>`;
 }
 function openDriverModal(id){
   document.getElementById('dm_id').value = id||'';
@@ -912,6 +989,7 @@ function openDriverModal(id){
   document.getElementById('dm_license').value = d?.license_no || '';
   document.getElementById('dm_salary').value = d?.gross_salary || '';
   document.getElementById('dm_status').value = d?.status || 'active';
+  document.getElementById('dm_pin').value = d?.pin || String(Math.floor(1000+Math.random()*9000));
   document.getElementById('driverModalOverlay').classList.add('show');
 }
 async function saveDriver(){
@@ -920,12 +998,14 @@ async function saveDriver(){
   if(!name){ toast('Name is required'); return; }
   const photoFile = document.getElementById('dm_photo').files[0];
   const photo_url = photoFile ? await fileToBase64(photoFile) : (state.drivers.find(x=>x.id===id)?.photo_url || null);
+  const pin = document.getElementById('dm_pin').value.trim();
+  if(!/^\d{4}$/.test(pin)){ toast('PIN must be exactly 4 digits'); return; }
   const payload = {
     name, phone: document.getElementById('dm_phone').value.trim(),
     license_no: document.getElementById('dm_license').value.trim(),
     gross_salary: Number(document.getElementById('dm_salary').value)||0,
     status: document.getElementById('dm_status').value,
-    photo_url
+    photo_url, pin
   };
   if(id){
     const updated = await dbUpdate('fleet_drivers', id, payload);
@@ -1262,20 +1342,32 @@ function initDriverHome(){
     state.driverMap = L.map('driverMap').setView([11.0,78.3], 6);
     L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(state.driverMap);
   }
+  checkLocationPermission();
 }
 function updateTripCard(){
   const v = state.vehicles.find(x=>x.id===document.getElementById('vehicleSelect').value);
   document.getElementById('tripStatusLabel').textContent = state.activeTrip ? 'Trip in progress' : 'No active trip';
   document.getElementById('tripVehicleLabel').textContent = v ? v.name : 'Select a vehicle to begin';
 }
-async function startTrip(){
+function openStartTripModal(){
   const vehicleId = document.getElementById('vehicleSelect').value;
   if(!vehicleId){ toast('Pick a vehicle first'); return; }
-  const km = prompt('Enter starting odometer (KM):');
-  if(km===null || km==='' || isNaN(km)){ toast('Start KM is required'); return; }
+  const v = state.vehicles.find(x=>x.id===vehicleId);
+  document.getElementById('stm_vehicleName').textContent = v ? v.name : '';
+  document.getElementById('stm_km').value = '';
+  document.getElementById('stm_photo').value = '';
+  document.getElementById('startTripModalOverlay').classList.add('show');
+}
+async function confirmStartTrip(){
+  const vehicleId = document.getElementById('vehicleSelect').value;
+  const km = document.getElementById('stm_km').value;
+  if(km===null || km==='' || isNaN(km)){ toast('Enter a valid starting KM'); return; }
+  const photoFile = document.getElementById('stm_photo').files[0];
+  if(!photoFile){ toast('Please upload a photo of the odometer'); return; }
+  const start_km_photo = await fileToBase64(photoFile);
   const trip = await dbInsert('fleet_trips', {
     driver_id: state.driverId, vehicle_id: vehicleId,
-    start_time: new Date().toISOString(), start_km: Number(km), status:'ongoing'
+    start_time: new Date().toISOString(), start_km: Number(km), status:'ongoing', start_km_photo
   });
   state.trips.unshift(trip);
   state.activeTrip = trip;
@@ -1283,9 +1375,18 @@ async function startTrip(){
   document.getElementById('startBtn').classList.add('hidden');
   document.getElementById('stopBtn').classList.remove('hidden');
   updateTripCard();
+  sendImmediateLocationFix();
   startWatchingLocation();
   startElapsedTimer();
+  closeModal('startTripModalOverlay');
   toast('Trip started — drive safe!');
+}
+function sendImmediateLocationFix(){
+  if(!navigator.geolocation) return;
+  navigator.geolocation.getCurrentPosition(async pos=>{
+    const {latitude, longitude, speed} = pos.coords;
+    await dbUpsertLocation(state.driverId, latitude, longitude, speed ? speed*3.6 : 0);
+  }, err=>{ console.warn('immediate fix failed', err); }, {enableHighAccuracy:true, timeout:15000});
 }
 async function stopTrip(){
   if(!state.activeTrip) return;
@@ -1320,6 +1421,40 @@ function startElapsedTimer(){
   const ms0 = Date.now() - new Date(state.activeTrip.start_time).getTime();
   document.getElementById('tripElapsed').textContent = `${Math.floor(ms0/3600000)}h ${Math.floor((ms0%3600000)/60000)}m`;
 }
+function renderLocPermRow(statusText, color, showBtn){
+  const el = document.getElementById('locPermRow');
+  if(!el) return;
+  el.innerHTML = `<span style="color:${color};">📍 ${statusText}</span>` +
+    (showBtn ? `<button class="btn btn-sm btn-orange" onclick="requestLocationAccess()">Allow Location</button>` : '');
+}
+async function checkLocationPermission(){
+  if(!navigator.geolocation){ renderLocPermRow('Location not supported on this device', '#ff6b6b', false); return; }
+  if(navigator.permissions && navigator.permissions.query){
+    try{
+      const status = await navigator.permissions.query({name:'geolocation'});
+      updateLocPermFromStatus(status.state);
+      status.onchange = ()=> updateLocPermFromStatus(status.state);
+      return;
+    }catch(e){ /* fall through */ }
+  }
+  renderLocPermRow('Tap to allow location for live tracking', '#F59E0B', true);
+}
+function updateLocPermFromStatus(state_){
+  if(state_==='granted') renderLocPermRow('Location access ON — admin can track you live', '#22c55e', false);
+  else if(state_==='denied') renderLocPermRow('Location BLOCKED — turn it on in phone/browser settings', '#ff6b6b', false);
+  else renderLocPermRow('Tap to allow location for live tracking', '#F59E0B', true);
+}
+function requestLocationAccess(){
+  if(!navigator.geolocation){ toast('Geolocation not supported on this device'); return; }
+  navigator.geolocation.getCurrentPosition(
+    ()=>{ renderLocPermRow('Location access ON — admin can track you live', '#22c55e', false); toast('Location access granted'); },
+    err=>{
+      if(err.code===1) renderLocPermRow('Location BLOCKED — turn it on in phone/browser settings', '#ff6b6b', false);
+      toast('Could not get location — please allow location access in your browser settings');
+    },
+    {enableHighAccuracy:true, timeout:15000}
+  );
+}
 function startWatchingLocation(){
   if(!navigator.geolocation){ toast('Geolocation not supported on this device'); return; }
   state.watchId = navigator.geolocation.watchPosition(async pos=>{
@@ -1332,7 +1467,15 @@ function startWatchingLocation(){
       else state.driverMarker = L.marker([latitude, longitude]).addTo(state.driverMap);
       state.driverMap.setView([latitude, longitude], 14);
     }
-  }, err=>{ console.warn(err); }, {enableHighAccuracy:true, maximumAge:10000, timeout:20000});
+  }, err=>{
+    console.warn(err);
+    if(err.code===1){
+      renderLocPermRow('Location BLOCKED — admin cannot see you. Turn it on in settings', '#ff6b6b', false);
+      toast('⚠ Location permission denied — admin cannot track this trip');
+    }else{
+      toast('⚠ Could not get GPS signal — check location is turned on');
+    }
+  }, {enableHighAccuracy:true, maximumAge:10000, timeout:20000});
 }
 async function sendSOS(){
   if(!confirm('Send an emergency alert to admin right now?')) return;
