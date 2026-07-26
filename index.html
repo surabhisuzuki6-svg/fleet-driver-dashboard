@@ -683,6 +683,17 @@ async function boot(){
   document.getElementById('connPill').innerHTML = sb
     ? '<span class="blip"></span> Live (Supabase)'
     : '<span class="blip" style="background:#F59E0B;"></span> Local demo mode';
+  applyLinkMode();
+}
+function applyLinkMode(){
+  // If the link was shared with ?driver=1, hide the Admin Dashboard button
+  // entirely and open straight to driver login — so drivers never even see it.
+  const params = new URLSearchParams(window.location.search);
+  if(params.get('driver')==='1'){
+    const adminBtn = document.querySelector('.role-btn.admin');
+    if(adminBtn) adminBtn.style.display = 'none';
+    document.getElementById('driverPickWrap').classList.remove('hidden');
+  }
 }
 
 function subscribeRealtime(){
